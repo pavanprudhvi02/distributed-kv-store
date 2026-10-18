@@ -199,7 +199,10 @@ function esc(s) {
 }
 
 // ---------- loop ----------
-function frame(nowMs) {
+// A timer rather than requestAnimationFrame, so the cluster keeps running
+// (throttled) in background tabs instead of freezing.
+function frame() {
+  const nowMs = performance.now();
   const dt = Math.min(100, nowMs - lastFrame);
   lastFrame = nowMs;
   if (!paused) {
@@ -212,7 +215,6 @@ function frame(nowMs) {
   }
   state = JSON.parse(sim.state());
   render();
-  requestAnimationFrame(frame);
 }
 
 function refresh() {
@@ -280,7 +282,5 @@ $('reset-btn').addEventListener('click', () => {
 });
 
 $('app').setAttribute('aria-busy', 'false');
-requestAnimationFrame((t) => {
-  lastFrame = t;
-  frame(t);
-});
+lastFrame = performance.now();
+setInterval(frame, 16);
