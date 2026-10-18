@@ -12,7 +12,8 @@ FROM ubuntu:24.04
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       libgrpc++1.51t64 libprotobuf32t64 \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --create-home kv
+    && useradd --system --create-home kv \
+    && mkdir -p /home/kv/data && chown kv:kv /home/kv/data   # volumes inherit this ownership
 COPY --from=build /src/build/kvd /src/build/kvctl /src/build/kvbench /usr/local/bin/
 USER kv
 WORKDIR /home/kv
