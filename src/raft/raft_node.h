@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -27,6 +28,11 @@ struct RaftConfig {
   std::chrono::milliseconds heartbeat_interval{60};
   size_t max_entries_per_append = 256;
   bool sync_log = true;
+  // false: no ticker/applier threads; the owner drives the node by calling
+  // Tick() and ApplyCommitted() (used by the single-threaded browser demo).
+  bool background_threads = true;
+  // Time source; defaults to steady_clock. A simulation can supply virtual time.
+  std::function<std::chrono::steady_clock::time_point()> clock;
 };
 
 struct RaftStatus {
@@ -37,6 +43,9 @@ struct RaftStatus {
   uint64_t last_index = 0;
   uint64_t commit_index = 0;
   uint64_t last_applied = 0;
+  std::string voted_for;
+  std::chrono::steady_clock::time_point election_timer_start;
+  std::chrono::steady_clock::time_point election_deadline;
 };
 
 // One member of a Raft group (Ongaro & Ousterhout, "In Search of an
@@ -65,6 +74,15 @@ class RaftNode {
   // Returns NotLeader (with a leader hint when known) on followers.
   Status Propose(const std::string& command, std::chrono::milliseconds timeout, uint64_t* index = nullptr);
 
+  // Non-blocking form of Propose: appends on the leader and starts replication.
+  // The caller learns the outcome by watching whether the entry at `index`
+  // commits with the same `term`.
+  Status Append(const std::string& command, uint64_t* index = nullptr, uint64_t* term = nullptr);
+
+  // Manual driving, for nodes started with background_threads = false.
+  void Tick();             // elections and heartbeats due at the current time
+  size_t ApplyCommitted(); // hands newly committed entries to the state machine
+
   // Linearizable read barrier: returns Ok once this node is confirmed as leader
   // and has applied everything committed before the call.
   Status ReadBarrier(std::chrono::milliseconds timeout);
@@ -73,12 +91,15 @@ class RaftNode {
   AppendEntriesResponse HandleAppendEntries(const AppendEntriesRequest& req);
 
   RaftStatus GetStatus() const;
+  std::vector<LogEntry> LogSlice(uint64_t from, size_t max) const;
   bool IsLeader() const;
   const std::string& id() const { return config_.id; }
 
  private:
   using Clock = std::chrono::steady_clock;
 
+  Clock::time_point Now() const;
+  Status AppendLocked(const std::string& command, LogEntry* out);
   void TickerLoop();
   void ApplierLoop();
 
@@ -105,6 +126,7 @@ class RaftNode {
   std::string leader_id_;
   uint64_t commit_index_ = 0;
   uint64_t last_applied_ = 0;
+  Clock::time_point election_timer_start_;
   Clock::time_point election_deadline_;
   Clock::time_point next_heartbeat_;
   std::mt19937_64 rng_;

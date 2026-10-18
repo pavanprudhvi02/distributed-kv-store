@@ -22,10 +22,14 @@ Status RaftNode::Start() {
     ResetElectionTimerLocked();
   }
   running_ = true;
-  ticker_ = std::thread([this] { TickerLoop(); });
-  applier_ = std::thread([this] { ApplierLoop(); });
+  if (config_.background_threads) {
+    ticker_ = std::thread([this] { TickerLoop(); });
+    applier_ = std::thread([this] { ApplierLoop(); });
+  }
   return Status::Ok();
 }
+
+RaftNode::Clock::time_point RaftNode::Now() const { return config_.clock ? config_.clock() : Clock::now(); }
 
 void RaftNode::Stop() {
   if (!running_.exchange(false)) return;
@@ -42,20 +46,25 @@ void RaftNode::ResetElectionTimerLocked() {
   auto lo = config_.election_timeout_min.count();
   auto hi = std::max(lo, static_cast<long>(config_.election_timeout_max.count()));
   std::uniform_int_distribution<long> dist(lo, hi);
-  election_deadline_ = Clock::now() + std::chrono::milliseconds(dist(rng_));
+  election_timer_start_ = Now();
+  election_deadline_ = election_timer_start_ + std::chrono::milliseconds(dist(rng_));
 }
 
 void RaftNode::TickerLoop() {
   while (running_) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    std::lock_guard lock(mu_);
-    if (!running_) break;
-    auto now = Clock::now();
-    if (role_ == Role::kLeader) {
-      if (now >= next_heartbeat_) BroadcastAppendLocked();
-    } else if (now >= election_deadline_) {
-      StartElectionLocked();
-    }
+    Tick();
+  }
+}
+
+void RaftNode::Tick() {
+  std::lock_guard lock(mu_);
+  if (!running_) return;
+  auto now = Now();
+  if (role_ == Role::kLeader) {
+    if (now >= next_heartbeat_) BroadcastAppendLocked();
+  } else if (now >= election_deadline_) {
+    StartElectionLocked();
   }
 }
 
@@ -122,7 +131,7 @@ void RaftNode::BecomeLeaderLocked() {
 
 void RaftNode::BroadcastAppendLocked() {
   ++heartbeat_seq_;
-  next_heartbeat_ = Clock::now() + config_.heartbeat_interval;
+  next_heartbeat_ = Now() + config_.heartbeat_interval;
   for (const auto& peer : config_.peers) SendAppendLocked(peer);
 }
 
@@ -271,36 +280,63 @@ AppendEntriesResponse RaftNode::HandleAppendEntries(const AppendEntriesRequest& 
 
 void RaftNode::ApplierLoop() {
   while (running_) {
-    std::vector<LogEntry> batch;
     {
       std::unique_lock lock(mu_);
       apply_cv_.wait(lock, [this] { return !running_ || commit_index_ > last_applied_; });
       if (!running_) return;
-      batch = log_.Slice(last_applied_ + 1, static_cast<size_t>(commit_index_ - last_applied_));
     }
-    // Committed entries never change, so they can be applied without the lock.
-    for (const auto& e : batch) {
-      if (!e.command.empty()) state_machine_->Apply(e.index, e.command);
-    }
-    {
-      std::lock_guard lock(mu_);
-      if (!batch.empty()) last_applied_ = std::max(last_applied_, batch.back().index);
-    }
-    state_cv_.notify_all();
+    ApplyCommitted();
   }
 }
 
-Status RaftNode::Propose(const std::string& command, std::chrono::milliseconds timeout, uint64_t* index) {
+size_t RaftNode::ApplyCommitted() {
+  std::vector<LogEntry> batch;
+  {
+    std::lock_guard lock(mu_);
+    if (commit_index_ <= last_applied_) return 0;
+    batch = log_.Slice(last_applied_ + 1, static_cast<size_t>(commit_index_ - last_applied_));
+  }
+  // Committed entries never change, so they can be applied without the lock.
+  for (const auto& e : batch) {
+    if (!e.command.empty()) state_machine_->Apply(e.index, e.command);
+  }
+  {
+    std::lock_guard lock(mu_);
+    if (!batch.empty()) last_applied_ = std::max(last_applied_, batch.back().index);
+  }
+  state_cv_.notify_all();
+  return batch.size();
+}
+
+Status RaftNode::AppendLocked(const std::string& command, LogEntry* out) {
   if (command.empty()) return Status::InvalidArgument("empty command");
-  std::unique_lock lock(mu_);
   if (role_ != Role::kLeader) return Status::NotLeader(leader_id_);
-  uint64_t term = log_.current_term();
-  LogEntry entry{term, log_.LastIndex() + 1, command};
+  LogEntry entry{log_.current_term(), log_.LastIndex() + 1, command};
   Status s = log_.Append({entry});
   if (!s.ok()) return s;
-  if (index != nullptr) *index = entry.index;
   AdvanceCommitLocked();  // single-node groups commit immediately
   for (const auto& peer : config_.peers) SendAppendLocked(peer);
+  *out = entry;
+  return Status::Ok();
+}
+
+Status RaftNode::Append(const std::string& command, uint64_t* index, uint64_t* term) {
+  std::lock_guard lock(mu_);
+  LogEntry entry;
+  Status s = AppendLocked(command, &entry);
+  if (!s.ok()) return s;
+  if (index != nullptr) *index = entry.index;
+  if (term != nullptr) *term = entry.term;
+  return Status::Ok();
+}
+
+Status RaftNode::Propose(const std::string& command, std::chrono::milliseconds timeout, uint64_t* index) {
+  std::unique_lock lock(mu_);
+  LogEntry entry;
+  Status s = AppendLocked(command, &entry);
+  if (!s.ok()) return s;
+  if (index != nullptr) *index = entry.index;
+  uint64_t term = entry.term;
 
   bool done = state_cv_.wait_for(lock, timeout, [&] {
     return !running_ || last_applied_ >= entry.index || role_ != Role::kLeader || log_.current_term() != term;
@@ -361,7 +397,15 @@ RaftStatus RaftNode::GetStatus() const {
   s.last_index = log_.LastIndex();
   s.commit_index = commit_index_;
   s.last_applied = last_applied_;
+  s.voted_for = log_.voted_for();
+  s.election_timer_start = election_timer_start_;
+  s.election_deadline = election_deadline_;
   return s;
+}
+
+std::vector<LogEntry> RaftNode::LogSlice(uint64_t from, size_t max) const {
+  std::lock_guard lock(mu_);
+  return log_.Slice(std::max<uint64_t>(from, 1), max);
 }
 
 bool RaftNode::IsLeader() const {
