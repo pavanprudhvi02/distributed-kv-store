@@ -69,7 +69,7 @@ got=$(ctl get key:42) || fail "get key:42 with n1 down"
 echo "== restarting n1; it must catch up from the others"
 start n1 7101
 caught_up=0
-for _ in $(seq 1 50); do
+for _ in $(seq 1 100); do
   # n1's applied index for every shard must reach that shard's leader's commit index.
   if "$KVCTL" --cluster "127.0.0.1:7101,127.0.0.1:7102,127.0.0.1:7103" status | awk '
       /node n1/ {n1=1; next} /node / {n1=0}

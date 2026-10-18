@@ -43,9 +43,9 @@ void RaftNode::Stop() {
 }
 
 void RaftNode::ResetElectionTimerLocked() {
-  auto lo = config_.election_timeout_min.count();
-  auto hi = std::max(lo, static_cast<long>(config_.election_timeout_max.count()));
-  std::uniform_int_distribution<long> dist(lo, hi);
+  int64_t lo = config_.election_timeout_min.count();
+  int64_t hi = std::max<int64_t>(lo, config_.election_timeout_max.count());
+  std::uniform_int_distribution<int64_t> dist(lo, hi);
   election_timer_start_ = Now();
   election_deadline_ = election_timer_start_ + std::chrono::milliseconds(dist(rng_));
 }
