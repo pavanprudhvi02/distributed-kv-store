@@ -27,7 +27,13 @@ jobs:
       - name: Unit and simulation tests
         run: ctest --test-dir build --output-on-failure -j2
       - name: Cluster test (real processes over gRPC)
-        run: scripts/cluster_test.sh build
+        run: |
+          set -o pipefail
+          scripts/cluster_test.sh build 2>&1 | tee cluster.out || {
+            grep -E "FAIL|Error|error" cluster.out | head -5 | while IFS= read -r l; do echo "::error title=cluster test::$l"; done
+            tail -8 cluster.out | while IFS= read -r l; do echo "::warning title=cluster log::$l"; done
+            exit 1
+          }
       - name: Short benchmark
         run: |
           d=$(mktemp -d)

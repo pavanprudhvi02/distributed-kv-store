@@ -25,8 +25,12 @@ jobs:
           version: 3.1.74
       - name: Build WebAssembly module
         run: |
-          emcmake cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Release -DKV_BUILD_TESTS=OFF -DKV_BUILD_SERVER=OFF
-          cmake --build build-wasm --target kv_sim -j"$(nproc)"
+          set -o pipefail
+          emcmake cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Release -DKV_BUILD_TESTS=OFF -DKV_BUILD_SERVER=OFF 2>&1 | tee build.log
+          cmake --build build-wasm --target kv_sim -j"$(nproc)" 2>&1 | tee -a build.log || {
+            grep -E "error|Error" build.log | head -8 | while IFS= read -r l; do echo "::error title=wasm build::$l"; done
+            exit 1
+          }
       - name: Assemble site
         run: |
           mkdir -p _site
