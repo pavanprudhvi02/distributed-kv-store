@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build, unit tests, 3-node cluster test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+      - name: Unit and simulation tests
+        run: ctest --test-dir build --output-on-failure -j2
+      - name: Cluster test (real processes over gRPC)
+        run: scripts/cluster_test.sh build
+      - name: Short benchmark
+        run: |
+          d=$(mktemp -d)
+          c="n1=127.0.0.1:7201,n2=127.0.0.1:7202,n3=127.0.0.1:7203"
+          for i in 1 2 3; do build/kvd --id n$i --listen 127.0.0.1:720$i --cluster $c --shards 4 --data $d/n$i > /dev/null 2>&1 & done
+          sleep 2
+          build/kvbench --cluster 127.0.0.1:7201,127.0.0.1:7202,127.0.0.1:7203 --threads 4 --ops 300
+          kill $(jobs -p)
+
+  sanitizers:
+    name: Tests under ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: AddressSanitizer + UBSan
+            flags: -DKV_SANITIZE=ON
+          - name: ThreadSanitizer
+            flags: -DKV_TSAN=ON
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DKV_BUILD_SERVER=OFF ${{ matrix.flags }}
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+      - name: Test
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+          ASAN_OPTIONS: detect_leaks=1
+        run: ctest --test-dir build --output-on-failure
+
+  docker:
+    name: Docker image and compose smoke test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start a 3-node cluster
+        run: docker compose up -d --build
+      - name: Write and read through the cluster
+        run: |
+          kvctl() { docker compose exec -T n1 kvctl --cluster n1:7001,n2:7001,n3:7001 "$@"; }
+          for i in $(seq 1 20); do kvctl put "k$i" "v$i"; done
+          test "$(kvctl get k7)" = "v7"
+          docker compose stop n2
+          kvctl put after-stop yes
+          test "$(kvctl get after-stop)" = "yes"
+          kvctl status
+      - name: Logs
+        if: failure()
+        run: docker compose logs --tail 100
+      - name: Stop
+        if: always()
+        run: docker compose down -v
