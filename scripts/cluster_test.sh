@@ -41,6 +41,16 @@ start n1 7101
 start n2 7102
 start n3 7103
 
+wait_ready() {
+  for _ in $(seq 1 60); do
+    up=$("$KVCTL" --cluster "$ADDRS" status 2>/dev/null | grep -c '  node ' || true)
+    [[ "$up" == "$1" ]] && return 0
+    sleep 0.5
+  done
+  fail "nodes did not come up"
+}
+wait_ready 3
+
 echo "== writing 200 keys"
 for i in $(seq 1 200); do ctl put "key:$i" "value-$i" > /dev/null || fail "put key:$i"; done
 
