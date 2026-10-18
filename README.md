@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/pavanprudhvi02/distributed-kv-store/actions/workflows/ci.yml/badge.svg)](https://github.com/pavanprudhvi02/distributed-kv-store/actions/workflows/ci.yml)
 
+**Live demo: [pavanprudhvi02.github.io/distributed-kv-store](https://pavanprudhvi02.github.io/distributed-kv-store/)**. The Raft layer is compiled to WebAssembly and runs as a 5-node cluster in your browser. Crash the leader, cut the network and watch elections, log replication and commits as they happen.
+
 A sharded, replicated key-value store in C++20. Keys are spread over shards with consistent hashing, every shard is replicated across nodes with its own **Raft** group, and each replica stores its data in an **LSM-tree** engine written from scratch. Nodes talk to each other and to clients over **gRPC**.
 
 Originally built for my Spring 2025 coursework at the University of Florida; this repository is a clean rebuild.
@@ -43,6 +45,7 @@ flowchart LR
 | Durability | Term, vote and log are on disk (CRC-checked records, fsync) before the node answers an RPC that depends on them |
 | Linearizable reads | ReadIndex: the leader records its commit index, confirms it is still leader with a heartbeat round to a majority, waits for apply to catch up, then reads. An isolated leader that still thinks it leads cannot serve a stale read. |
 | Transport | `Transport` interface with a gRPC implementation for real clusters and a simulated network for tests |
+| Driving | Normally a ticker thread and an applier thread; with `background_threads = false` and an injected clock the owner calls `Tick()` and `ApplyCommitted()` itself, which is how the browser demo runs five nodes on one thread in virtual time |
 
 Not implemented yet: snapshots and log compaction (the log grows and is replayed from the start on restart), membership changes, and pre-vote.
 
@@ -110,6 +113,7 @@ scripts/cluster_test.sh build
 | `raft_partition_test` | **Network partitions** on a simulated network: a leader cut off in a minority cannot commit and steps down on heal, with its uncommitted entry discarded; an isolated leader refuses reads; an isolated follower rejoins and repairs its log; six rounds of random majority/minority splits with 10% message loss, checking that replicas never diverge and **no acknowledged write is lost** |
 | `hash_ring_test` | Determinism, balance within 20% across 8 shards, adding a shard moves about 1/5 of the keys and only onto the new shard |
 | `shard_test` | 3 nodes × 4 shards with real LSM storage: keys spread across shards, all replicas hold the same data, and the cluster survives a node crash; the node catches up on restart |
+| `raft_sim_test` | The browser demo's simulation: elects a leader and replicates writes, a write sent to a cut-off leader is reported as never committed while the majority keeps working, and a crashed leader is replaced and catches up after restart |
 | `cluster_test.sh` | Real `kvd` processes over gRPC: 300 writes, reads and deletes, kill a node, keep writing, restart it and check it caught up |
 
 CI builds everything, runs the suites, runs the cluster test, runs the core tests again under AddressSanitizer + UBSan and under ThreadSanitizer, and smoke-tests the Docker Compose cluster.
@@ -126,6 +130,7 @@ src/server/           gRPC transport, node service, kvd
 src/client/           client library, kvctl, kvbench
 tests/                GoogleTest suites and the simulated network
 scripts/              multi-process cluster test
+web/                  browser demo: single-threaded cluster simulation, WebAssembly bindings and page
 ```
 
 ## What I would add next

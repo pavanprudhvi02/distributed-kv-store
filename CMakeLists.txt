@@ -25,6 +25,16 @@ if(KV_TSAN)
   add_link_options(-fsanitize=thread)
 endif()
 
+if(EMSCRIPTEN)
+  # Browser demo: the Raft layer in a single-threaded simulation, compiled to WebAssembly.
+  add_executable(kv_sim web/sim_bindings.cc src/raft/raft_log.cc src/raft/raft_node.cc src/raft/command.cc)
+  target_include_directories(kv_sim PRIVATE src web)
+  target_link_options(kv_sim PRIVATE -lembind -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME=createRaftSim
+    -sALLOW_MEMORY_GROWTH=1 -sENVIRONMENT=web)
+  set_target_properties(kv_sim PROPERTIES OUTPUT_NAME raftsim SUFFIX ".mjs")
+  return()
+endif()
+
 find_package(Threads REQUIRED)
 
 # Core library: storage engine, Raft and sharding. No gRPC dependency, so the
@@ -107,6 +117,7 @@ if(KV_BUILD_TESTS)
     tests/raft_test.cc
     tests/raft_partition_test.cc
     tests/shard_test.cc
+    tests/raft_sim_test.cc
   )
   target_link_libraries(kv_tests PRIVATE kvcore GTest::gtest_main)
   include(GoogleTest)

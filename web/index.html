@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Raft Cluster · Live Demo</title>
+  <meta name="description" content="The Raft implementation from a C++ distributed key-value store, compiled to WebAssembly. Crash nodes, cut the network and watch leader election and log replication.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=JetBrains+Mono:wght@400;600&family=Source+Sans+3:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=__VERSION__">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <div>
+        <p class="eyebrow">Live demo · C++20 → WebAssembly</p>
+        <h1>Raft consensus, running in your browser</h1>
+        <p class="lede">Five nodes running the Raft implementation from my distributed key-value store, on a simulated network. Crash the leader or cut the network and watch the cluster elect a new leader without losing a committed write.</p>
+      </div>
+      <nav class="links">
+        <a href="https://github.com/pavanprudhvi02/distributed-kv-store" target="_blank" rel="noopener">Source on GitHub ↗</a>
+        <a href="https://pavanprudhvi02.github.io/" target="_blank" rel="noopener">Pavan Prudhvi Madhamsetty ↗</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap layout" id="app" aria-busy="true">
+    <section class="panel stage" aria-labelledby="cluster-h">
+      <div class="panel-head">
+        <h2 id="cluster-h">Cluster</h2>
+        <div class="clock"><span id="clock">0.0 s</span> virtual time</div>
+      </div>
+      <svg id="cluster" viewBox="0 0 520 440" role="img" aria-label="Five Raft nodes and the messages between them"></svg>
+      <ul class="legend" aria-label="Message types">
+        <li><i class="dot vote"></i>vote request</li>
+        <li><i class="dot vote-ok"></i>vote granted</li>
+        <li><i class="dot heartbeat"></i>heartbeat</li>
+        <li><i class="dot append"></i>log entries</li>
+        <li><i class="dot append-ok"></i>acknowledged</li>
+        <li><i class="dot dropped"></i>lost in transit</li>
+      </ul>
+      <div class="controls">
+        <div class="speed" role="radiogroup" aria-label="Simulation speed">
+          <label><input type="radio" name="speed" value="0.5"><span>0.5×</span></label>
+          <label><input type="radio" name="speed" value="1" checked><span>1×</span></label>
+          <label><input type="radio" name="speed" value="2"><span>2×</span></label>
+        </div>
+        <button class="btn" id="pause-btn" type="button">Pause</button>
+        <button class="btn ghost" id="reset-btn" type="button">Reset cluster</button>
+      </div>
+    </section>
+
+    <section class="panel side" aria-labelledby="try-h">
+      <h2 id="try-h">Break it</h2>
+      <div class="stack">
+        <button class="btn danger" id="crash-leader" type="button">Crash the leader</button>
+        <button class="btn danger" id="cut-leader" type="button">Cut the leader off with one follower</button>
+        <button class="btn" id="heal" type="button">Heal the network</button>
+        <button class="btn" id="restart-all" type="button">Restart crashed nodes</button>
+      </div>
+      <p class="hint">Click any node to crash or restart it.</p>
+
+      <h2 class="gap">Client</h2>
+      <form id="put-form" autocomplete="off">
+        <div class="row2">
+          <label class="field">Key<input name="key" maxlength="16" value="color" required pattern="[A-Za-z0-9_:\-]+"></label>
+          <label class="field">Value<input name="value" maxlength="16" value="blue" required pattern="[A-Za-z0-9_:\-]+"></label>
+        </div>
+        <label class="field">Send to
+          <select name="target" id="target">
+            <option value="-1">the current leader</option>
+          </select>
+        </label>
+        <div class="row2">
+          <button class="btn primary" type="submit">PUT</button>
+          <button class="btn" type="button" id="get-btn">GET</button>
+        </div>
+      </form>
+      <ol class="writes" id="writes" aria-live="polite"></ol>
+    </section>
+
+    <section class="panel events" aria-labelledby="events-h">
+      <h2 id="events-h">What just happened</h2>
+      <ol class="log" id="events" aria-live="polite"></ol>
+    </section>
+
+    <section class="panel nodes" aria-labelledby="nodes-h">
+      <h2 id="nodes-h">Inside each node</h2>
+      <div class="node-grid" id="node-grid"></div>
+    </section>
+  </main>
+
+  <footer class="wrap foot">
+    <p>Each node is the same <code>RaftNode</code> class from <code>src/raft</code> that the server runs, here in its single-threaded mode, driven by a virtual clock instead of its own ticker and applier threads. Messages travel a simulated network with 120 to 280 ms of latency, and each node keeps its log and vote in an in-memory file system so a restarted node recovers them. Timeouts are slowed down (1.5 to 3 s elections, 450 ms heartbeats) so you can watch them. In the real build, each node applies entries to the LSM-tree storage engine and talks to the others over gRPC.</p>
+  </footer>
+
+  <script type="module" src="app.js?v=__VERSION__"></script>
+</body>
+</html>
