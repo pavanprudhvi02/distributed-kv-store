@@ -1,0 +1,28 @@
+name: kvstore
+
+x-node: &node
+  build: .
+  image: distributed-kv-store:local
+  restart: unless-stopped
+
+services:
+  n1:
+    <<: *node
+    command: ["--id", "n1", "--listen", "0.0.0.0:7001", "--cluster", "n1=n1:7001,n2=n2:7001,n3=n3:7001", "--shards", "4", "--data", "/home/kv/data"]
+    ports: ["7001:7001"]
+    volumes: [n1-data:/home/kv/data]
+  n2:
+    <<: *node
+    command: ["--id", "n2", "--listen", "0.0.0.0:7001", "--cluster", "n1=n1:7001,n2=n2:7001,n3=n3:7001", "--shards", "4", "--data", "/home/kv/data"]
+    ports: ["7002:7001"]
+    volumes: [n2-data:/home/kv/data]
+  n3:
+    <<: *node
+    command: ["--id", "n3", "--listen", "0.0.0.0:7001", "--cluster", "n1=n1:7001,n2=n2:7001,n3=n3:7001", "--shards", "4", "--data", "/home/kv/data"]
+    ports: ["7003:7001"]
+    volumes: [n3-data:/home/kv/data]
+
+volumes:
+  n1-data:
+  n2-data:
+  n3-data:
